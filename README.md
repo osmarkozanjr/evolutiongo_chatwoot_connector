@@ -87,10 +87,6 @@ docker build --no-cache -f deploy/Dockerfile -t iceasa/evolution-chatwoot-connec
 
 #### Atualizando o service após o build
 
-**Via Portainer:** se você já criou a stack, precisa garantir que a imagem
-`latest` seja atualizada. Para isso, vá até a stack, clique em **Editor**,
-role a tela até o final, garanta que a chave **"Prune services"** esteja
-marcada e finalmente clique em **"Update the stack"**.
 
 **Via terminal:** primeiro execute `docker service ls` para descobrir o nome
 do service do conector (procure pelo service com a imagem

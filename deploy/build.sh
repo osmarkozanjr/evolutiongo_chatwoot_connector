@@ -47,12 +47,6 @@ cat <<EOF
  Imagem buildada. Agora atualize o service em produção:
 ==============================================================
 
---- Via Portainer -------------------------------------------
-
-Se você já criou a stack, precisa garantir que a imagem ${TAG}
-seja atualizada. Para isso, vá até a stack, clique em "Editor",
-role a tela até o final, garanta que a chave "Prune services"
-esteja marcada e finalmente clique em "Update the stack".
 
 --- Via terminal --------------------------------------------
 
