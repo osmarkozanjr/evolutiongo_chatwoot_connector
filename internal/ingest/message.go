@@ -381,6 +381,12 @@ func (s *Service) resolveContact(ctx context.Context, cfg *model.ChatwootConfig,
 		found, err = s.cw.SearchContact(ctx, cfg, m.RemoteJid)
 	} else {
 		found, err = s.searchContactWithBrazilVariants(ctx, cfg, phone)
+		// Fallback: se o telefone não achou (variantes BR, phone_number
+		// divergente), busca pelo identifier = JID, que é a chave estável do
+		// contato no Chatwoot. Evita tentar criar um contato que já existe.
+		if err == nil && found == nil {
+			found, err = s.cw.SearchContact(ctx, cfg, identifier)
+		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("ingest: erro ao buscar contato no chatwoot: %w", err)

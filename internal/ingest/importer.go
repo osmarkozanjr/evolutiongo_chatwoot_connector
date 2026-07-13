@@ -101,6 +101,14 @@ func (s *Service) upsertContactName(ctx context.Context, cfg *model.ChatwootConf
 	if err != nil {
 		return fmt.Errorf("ingest: erro ao buscar contato %s no chatwoot: %w", phone, err)
 	}
+	// Fallback pelo identifier = JID (chave estável) quando a busca por
+	// telefone não encontra, evitando tentar recriar um contato existente.
+	if found == nil {
+		found, err = s.cw.SearchContact(ctx, cfg, jid)
+		if err != nil {
+			return fmt.Errorf("ingest: erro ao buscar contato %s por identifier: %w", jid, err)
+		}
+	}
 	contactID := 0
 	if found != nil {
 		contactID = found.ID

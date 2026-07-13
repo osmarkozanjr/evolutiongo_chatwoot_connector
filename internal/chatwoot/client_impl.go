@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -86,6 +87,27 @@ func (c *HTTPClient) doJSON(ctx context.Context, cfg *model.ChatwootConfig, meth
 	return nil
 }
 
+// APIError representa uma resposta de erro (>=400) do Chatwoot, preservando o
+// status e o corpo bruto para que os chamadores possam reagir a casos
+// específicos (ex.: 422 "Identifier has already been taken").
+type APIError struct {
+	StatusCode int
+	Method     string
+	URL        string
+	Body       string
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("chatwoot: %s %s returned %d: %s", e.Method, e.URL, e.StatusCode, e.Body)
+}
+
+// isIdentifierTaken indica um 422 cujo corpo acusa colisão do campo identifier
+// (contato já existe no Chatwoot com o mesmo JID).
+func (e *APIError) isIdentifierTaken() bool {
+	return e.StatusCode == http.StatusUnprocessableEntity &&
+		strings.Contains(e.Body, "Identifier has already been taken")
+}
+
 // do executa a requisição HTTP com retry leve em 5xx e devolve o corpo bruto.
 // bodyFn é chamado a cada tentativa para reabrir o reader.
 func (c *HTTPClient) do(ctx context.Context, cfg *model.ChatwootConfig, method, url, contentType string, bodyFn func() io.Reader) ([]byte, error) {
@@ -125,7 +147,7 @@ func (c *HTTPClient) do(ctx context.Context, cfg *model.ChatwootConfig, method, 
 			return nil, lastErr
 		}
 		if resp.StatusCode >= 400 {
-			return nil, fmt.Errorf("chatwoot: %s %s returned %d: %s", method, url, resp.StatusCode, string(respBody))
+			return nil, &APIError{StatusCode: resp.StatusCode, Method: method, URL: url, Body: string(respBody)}
 		}
 		return respBody, nil
 	}
@@ -243,14 +265,33 @@ func (c *HTTPClient) CreateContact(ctx context.Context, cfg *model.ChatwootConfi
 		"avatar_url": avatarURL,
 	}
 	// createContact só define phone_number quando o jid contém '@' ou está vazio.
+	// Normaliza para um único '+' inicial: os chamadores já passam o número em
+	// E.164 ("+55…"), então prefixar cegamente geraria "++55…" — telefone
+	// inválido que quebra a busca por telefone dos próximos eventos.
 	if identifier == "" || strings.Contains(identifier, "@") {
 		if phone != "" {
-			data["phone_number"] = "+" + phone
+			data["phone_number"] = "+" + strings.TrimPrefix(phone, "+")
 		}
 	}
 
 	var res contactCreateDTO
 	if err := c.doJSON(ctx, cfg, http.MethodPost, "/contacts", data, &res); err != nil {
+		// Idempotência: se o contato já existe no Chatwoot com esse identifier
+		// (JID), o POST devolve 422 "Identifier has already been taken". Nesse
+		// caso resolvemos o contato existente pelo identifier em vez de falhar
+		// — necessário após perder o mapping local (ex.: recriação do banco),
+		// quando a busca por telefone não encontra o contato (variantes BR do
+		// 9º dígito, etc.).
+		var apiErr *APIError
+		if identifier != "" && errors.As(err, &apiErr) && apiErr.isIdentifierTaken() {
+			existing, sErr := c.SearchContact(ctx, cfg, identifier)
+			if sErr != nil {
+				return nil, fmt.Errorf("chatwoot: identifier %q já existe mas falhou ao buscá-lo: %w", identifier, sErr)
+			}
+			if existing != nil {
+				return existing, nil
+			}
+		}
 		return nil, err
 	}
 	if res.Payload != nil && res.Payload.Contact.ID != 0 {
