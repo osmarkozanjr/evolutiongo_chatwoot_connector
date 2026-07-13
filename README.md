@@ -68,7 +68,6 @@ imagem upstream continuam funcionando normalmente; a única mudança no service
 ### 1. Build da imagem do conector
 
 ```bash
-cd connector
 ./deploy/build.sh            # builda iceasa/evolution-chatwoot-connector:latest
 # ou com tag explícita:
 ./deploy/build.sh v0.1.0
@@ -81,7 +80,6 @@ O script builda `deploy/Dockerfile` (multi-stage, `golang:1.25-alpine` →
 o código mais recente. É o equivalente a rodar manualmente:
 
 ```bash
-cd connector
 docker build --no-cache -f deploy/Dockerfile -t iceasa/evolution-chatwoot-connector:latest .
 ```
 
@@ -117,7 +115,7 @@ atual) e não precisam ser recriados.
 
 ### 3. Editar os placeholders do stack file
 
-Abra `connector/deploy/evolution-go-with-connector.yaml` e troque:
+Abra `deploy/evolution-go-with-connector.yaml` e troque:
 
 | Placeholder | Onde | O que é |
 |---|---|---|
@@ -135,8 +133,8 @@ O stack file usa **configs externos** do Swarm para o injetor do menu
 via Portainer, que não tem acesso aos arquivos locais do repositório:
 
 ```bash
-docker config create inject_menu_sh       connector/deploy/inject-menu.sh
-docker config create connector_menu_js connector/deploy/connector-menu.js
+docker config create inject_menu_sh       deploy/inject-menu.sh
+docker config create connector_menu_js deploy/connector-menu.js
 ```
 
 #### Atualizando o injetor quando o código mudar (garantia em caso de update)
@@ -163,14 +161,14 @@ config estiver em uso** por um service. Por isso, se `inject-menu.sh` ou
 
    ```bash
    docker config rm inject_menu_sh connector_menu_js
-   docker config create inject_menu_sh       connector/deploy/inject-menu.sh
-   docker config create connector_menu_js connector/deploy/connector-menu.js
+   docker config create inject_menu_sh       deploy/inject-menu.sh
+   docker config create connector_menu_js deploy/connector-menu.js
    ```
 
 3. Faça o **Update the stack** para recriar o service (no Portainer: stack
    → **Editor** → role até o final → marque **"Prune services"** →
    **"Update the stack"**; via terminal:
-   `docker stack deploy -c connector/deploy/evolution-go-with-connector.yaml evolution`).
+   `docker stack deploy -c deploy/evolution-go-with-connector.yaml evolution`).
 
 Como o injetor roda **a cada start do container** do `evolution_go`,
 atualizações da imagem oficial do evolutiongo são re-patchadas
@@ -181,7 +179,7 @@ dos arquivos do injetor (`inject-menu.sh`/`connector-menu.js`) mudar.
 
 **Via Portainer:** vá em **Stacks → Add stack** (ou selecione a stack
 existente e clique em **Editor**, se ela já foi criada), cole o conteúdo de
-`connector/deploy/evolution-go-with-connector.yaml` (já com os placeholders
+`deploy/evolution-go-with-connector.yaml` (já com os placeholders
 preenchidos), role a tela até o final, garanta que a chave **"Prune
 services"** esteja marcada e clique em **"Deploy the stack"** (ou **"Update
 the stack"**, no caso de stack existente).
@@ -189,7 +187,7 @@ the stack"**, no caso de stack existente).
 **Via terminal:**
 
 ```bash
-docker stack deploy -c connector/deploy/evolution-go-with-connector.yaml evolution
+docker stack deploy -c deploy/evolution-go-with-connector.yaml evolution
 ```
 
 (ajuste o nome da stack conforme já usado em produção — este arquivo é a
