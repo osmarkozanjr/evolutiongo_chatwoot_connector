@@ -139,7 +139,7 @@ func (c *HTTPClient) do(ctx context.Context, cfg *model.ChatwootConfig, method, 
 		resp.Body.Close()
 
 		if resp.StatusCode >= 500 {
-			lastErr = fmt.Errorf("chatwoot: %s %s returned %d: %s", method, url, resp.StatusCode, string(respBody))
+			lastErr = &APIError{StatusCode: resp.StatusCode, Method: method, URL: url, Body: string(respBody)}
 			if attempt < maxAttempts {
 				time.Sleep(time.Duration(attempt) * 300 * time.Millisecond)
 				continue
@@ -332,10 +332,25 @@ type conversationListDTO struct {
 
 // GetOpenConversation acha a conversa 'open' do contato no inbox
 // (porta de getOpenConversationByContact: GET contacts/{id}/conversations).
+//
+// Resiliência: esse endpoint do Chatwoot serializa TODAS as conversas do
+// contato e calcula can_reply? em cada uma. Se o contato tem uma conversa
+// órfã (inbox/channel apagado), o Chatwoot estoura 500
+// ("undefined method 'channel_type' for nil") e a listagem inteira falha,
+// mesmo havendo conversas íntegras. Tratamos esse 500 persistente (já houve
+// retry no do()) como "nenhuma conversa aberta encontrada" — o chamador então
+// cria uma conversa nova no inbox atual e passa a usar o mapping local,
+// deixando de bater neste endpoint quebrado. Se o Chatwoot estivesse
+// realmente fora, o CreateConversation seguinte também falharia e a mensagem
+// seria reenfileirada sem duplicar.
 func (c *HTTPClient) GetOpenConversation(ctx context.Context, cfg *model.ChatwootConfig, contactID, inboxID int) (*Conversation, error) {
 	var res conversationListDTO
 	path := "/contacts/" + strconv.Itoa(contactID) + "/conversations"
 	if err := c.doJSON(ctx, cfg, http.MethodGet, path, nil, &res); err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode >= 500 {
+			return nil, nil
+		}
 		return nil, err
 	}
 	for _, cv := range res.Payload {
