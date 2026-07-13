@@ -1,0 +1,217 @@
+# ANTES DE SUBIR A STACK CRIE OS BANCOS NO POSTGRES:
+# psql -U postgres -c "CREATE DATABASE evogo_auth;"
+# psql -U postgres -c "CREATE DATABASE evogo_users;"
+# psql -U postgres -c "CREATE DATABASE evogo_chatwoot;"
+#
+# CRIE TAMBÉM O VOLUME EXTERNO DO RABBITMQ:
+# docker volume create rabbitmq_data
+#
+# Esta é a evolução do evolution-go.yaml original (stack em produção), com o
+# broker RabbitMQ e o evolution-chatwoot-connector adicionados. O service
+# evolution_go continua usando a MESMA imagem oficial (evoapicloud/evolution-go),
+# sem fork — updates da imagem upstream continuam funcionando normalmente.
+#
+# Troque os placeholders abaixo antes do deploy:
+#   SEU-TOKEN-AQUI            -> GLOBAL_API_KEY do evolutiongo (mesma chave usada
+#                                 hoje em produção, ou uma nova se for rotacionar)
+#   SEU-TOKEN-CONECTOR-AQUI   -> CONNECTOR_API_KEY (protege o painel/API do conector)
+#   SENHAAQUI                 -> senha do Postgres (mesma já usada pelo evolution_go)
+#   SENHA-RABBITMQ-AQUI       -> senha do usuário admin do RabbitMQ
+
+version: '3.8'
+services:
+  evolution_go:
+    image: evoapicloud/evolution-go:latest
+    # Entrypoint com patch da dashboard: injeta o atalho "Chatwoot" no manager
+    # a cada start do container (sobrevive a updates da imagem oficial) e em
+    # seguida executa o servidor original. Sem fork, sem rebuild.
+    entrypoint: ["/bin/sh", "/patch/inject-menu.sh"]
+    configs:
+      - source: inject_menu_sh
+        target: /patch/inject-menu.sh
+        mode: 0755
+      - source: connector_menu_js_v3
+        target: /patch/connector-menu.js
+        mode: 0644
+    networks:
+      - minha_rede
+
+    environment:
+      SERVER_PORT: 4000
+      CLIENT_NAME: "evolution"
+      GLOBAL_API_KEY: "SEU-TOKEN-AQUI"
+      POSTGRES_AUTH_DB: "postgresql://postgres:SENHAAQUI@postgres:5432/evogo_auth?sslmode=disable"
+      POSTGRES_USERS_DB: "postgresql://postgres:SENHAAQUI@postgres:5432/evogo_users?sslmode=disable"
+      DATABASE_SAVE_MESSAGES: "false"
+      REDIS_URL: "redis://redis:6379/3"
+      WADEBUG: "INFO"
+      LOGTYPE: "console"
+      LOG_DIRECTORY: "/app/logs"
+      LOG_MAX_SIZE: "100"
+      LOG_MAX_BACKUPS: "5"
+      LOG_MAX_AGE: "30"
+      LOG_COMPRESS: "true"
+      CONNECT_ON_STARTUP: "true"
+      WEBHOOKFILES: "true"
+      OS_NAME: "Linux"
+      API_AUDIO_CONVERTER: ""
+      API_AUDIO_CONVERTER_KEY: ""
+      PROXY_HOST: ""
+      PROXY_PORT: ""
+      PROXY_USERNAME: ""
+      PROXY_PASSWORD: ""
+      # AMQP habilitado: o evolution-chatwoot-connector consome as filas
+      # globais abaixo (mapa evento->fila documentado em connector/CONTRACTS.md §1).
+      AMQP_URL: "amqp://admin:SENHA-RABBITMQ-AQUI@rabbitmq:5672/"
+      AMQP_GLOBAL_ENABLED: "true"
+      AMQP_GLOBAL_EVENTS: "MESSAGE,SEND_MESSAGE,CONNECTION,QRCODE,CONTACT,HISTORY_SYNC"
+      NATS_URL: ""
+      NATS_GLOBAL_ENABLED: "false"
+      EVENT_IGNORE_GROUP: "false"
+      EVENT_IGNORE_STATUS: "true"
+      MINIO_ENABLED: "false"
+      MINIO_ENDPOINT: ""
+      MINIO_ACCESS_KEY: ""
+      MINIO_SECRET_KEY: ""
+      MINIO_BUCKET: ""
+      MINIO_USE_SSL: "false"
+    volumes:
+      - evolution_go_data:/app/dbdata
+      - evolution_go_logs:/app/logs
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      labels:
+        - traefik.enable=true
+        - traefik.http.routers.evolution_go.rule=Host(`evolutiongo.iceasa.com.br`)
+        - traefik.http.routers.evolution_go.entrypoints=websecure
+        - traefik.http.routers.evolution_go.tls.certresolver=letsencryptresolver
+        - traefik.http.routers.evolution_go.service=evolution_go
+        - traefik.http.services.evolution_go.loadbalancer.server.port=4000
+        - traefik.http.services.evolution_go.loadbalancer.passHostHeader=true
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    networks:
+      - minha_rede
+    environment:
+      RABBITMQ_DEFAULT_USER: "admin"
+      RABBITMQ_DEFAULT_PASS: "SENHA-RABBITMQ-AQUI"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      labels:
+        - traefik.enable=false
+        # Management UI (http://rabbitmq:15672) NÃO é exposta publicamente por
+        # padrão. Para expor via Traefik em um subdomínio protegido, descomente
+        # e ajuste as linhas abaixo (troque traefik.enable=false acima por true):
+        # - traefik.http.routers.rabbitmq.rule=Host(`rabbitmq.iceasa.com.br`)
+        # - traefik.http.routers.rabbitmq.entrypoints=websecure
+        # - traefik.http.routers.rabbitmq.tls.certresolver=letsencryptresolver
+        # - traefik.http.routers.rabbitmq.service=rabbitmq
+        # - traefik.http.services.rabbitmq.loadbalancer.server.port=15672
+
+  evolution_connector:
+    image: iceasa/evolution-chatwoot-connector:latest
+    networks:
+      - minha_rede
+    environment:
+      CONNECTOR_PORT: "4500"
+      # Mesmo domínio do evolutiongo, sob o caminho /connector (sem subdomínio
+      # novo). O webhook de cada inbox do Chatwoot é registrado como
+      # {CONNECTOR_PUBLIC_URL}/chatwoot/webhook/{instanceId}.
+      CONNECTOR_PUBLIC_URL: "https://evolutiongo.iceasa.com.br/connector"
+      CONNECTOR_API_KEY: "SEU-TOKEN-CONECTOR-AQUI"
+      CONNECTOR_POSTGRES_DSN: "postgresql://postgres:SENHAAQUI@postgres:5432/evogo_chatwoot?sslmode=disable"
+      CONNECTOR_REDIS_URL: "redis://redis:6379/4"
+      CONNECTOR_AMQP_URL: "amqp://admin:SENHA-RABBITMQ-AQUI@rabbitmq:5672/"
+      EVOLUTION_BASE_URL: "http://evolution_go:4000"
+      EVOLUTION_GLOBAL_API_KEY: "SEU-TOKEN-AQUI"
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        # 'any': o conector é um daemon — deve voltar mesmo se sair com exit 0
+        # (ex.: SIGTERM de healthcheck/update). 'on-failure' não reinicia exit 0.
+        condition: any
+        delay: 5s
+      labels:
+        # Mesmo domínio do evolutiongo, roteado por caminho: /connector/* vai
+        # para o conector (prioridade maior que o router do evolution_go, que
+        # casa o Host inteiro). O StripPrefix remove /connector antes de
+        # entregar ao gin (que serve tudo em /). O redirect garante que
+        # /connector (sem barra) vire /connector/ — necessário para os assets
+        # relativos do painel resolverem certo.
+        - traefik.enable=true
+        - traefik.http.routers.evolution_connector.rule=Host(`evolutiongo.iceasa.com.br`) && PathPrefix(`/connector`)
+        - traefik.http.routers.evolution_connector.priority=100
+        - traefik.http.routers.evolution_connector.entrypoints=websecure
+        - traefik.http.routers.evolution_connector.tls.certresolver=letsencryptresolver
+        - traefik.http.routers.evolution_connector.service=evolution_connector
+        - traefik.http.routers.evolution_connector.middlewares=connector-redirect,connector-strip
+        - traefik.http.middlewares.connector-redirect.redirectregex.regex=^https?://([^/]+)/connector$$
+        - traefik.http.middlewares.connector-redirect.redirectregex.replacement=https://$${1}/connector/
+        - traefik.http.middlewares.connector-strip.stripprefix.prefixes=/connector
+        - traefik.http.services.evolution_connector.loadbalancer.server.port=4500
+        - traefik.http.services.evolution_connector.loadbalancer.passHostHeader=true
+        # Alternativa por subdomínio próprio (se preferir voltar a usar
+        # evoconnector.iceasa.com.br, troque as labels acima por estas e ajuste
+        # CONNECTOR_PUBLIC_URL):
+        # - traefik.http.routers.evolution_connector.rule=Host(`evoconnector.iceasa.com.br`)
+
+
+volumes:
+  evolution_go_data:
+    external: true
+    name: evolution_go_data
+  evolution_go_logs:
+    external: true
+    name: evolution_go_logs
+  rabbitmq_data:
+    external: true
+    name: rabbitmq_data
+
+
+# Configs EXTERNOS: crie-os uma vez no servidor (manager) ANTES do deploy —
+# necessário para deploy via Portainer, que não tem acesso aos arquivos locais:
+#   docker config create inject_menu_sh       connector/deploy/inject-menu.sh
+#   docker config create connector_menu_js connector/deploy/connector-menu.js
+# Configs são IMUTÁVEIS e o `docker config rm` é bloqueado enquanto um
+# service os usa. Para atualizar o conteúdo (ver README, "Atualizando o
+# injetor"): remova o service que os usa (docker service rm
+# evolution_go_evolution_go), rode `docker config rm` + `docker config
+# create` com os MESMOS nomes a partir dos arquivos atualizados e faça o
+# Update the stack para recriar o service.
+configs:
+  inject_menu_sh:
+    external: true
+  connector_menu_js:
+    external: true
+
+
+networks:
+  minha_rede:
+    external: true
+    name: minha_rede

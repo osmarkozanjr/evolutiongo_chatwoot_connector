@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<!-- Painel de configuração da integração Chatwoot (evolution-chatwoot-connector).
+     HTML+CSS+JS vanilla, sem framework, servido via embed.FS (ui.go). -->
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chatwoot · evolution-chatwoot-connector</title>
+  <link rel="stylesheet" href="static/style.css?v=0.1.8" />
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <span>evolution-chatwoot</span>
+    </div>
+
+    <button id="btn-new" class="btn btn-new">+ Nova instância</button>
+
+    <div class="sidebar-section">Instâncias</div>
+    <ul id="instance-list" class="instance-list">
+      <li class="instance-empty">Carregando…</li>
+    </ul>
+
+    <div class="sidebar-footer">
+      <button id="btn-apikey" class="link-btn">Trocar apikey</button>
+    </div>
+  </aside>
+
+  <main class="content">
+    <header class="content-header">
+      <h1 id="panel-title">Chatwoot</h1>
+      <div id="status-msg" class="status-msg"></div>
+    </header>
+
+    <form id="cw-form" class="cw-form">
+      <input type="hidden" id="f-instanceId" />
+
+      <div class="field field-row">
+        <div class="field-label">
+          <label for="f-enabled">Enabled</label>
+          <span class="field-hint">Enable or disable the Chatwoot integration</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="f-enabled" />
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <label for="f-url">Chatwoot URL</label>
+        </div>
+        <input type="text" id="f-url" placeholder="https://chatwoot.exemplo.com.br" />
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <label for="f-accountId">Account ID</label>
+        </div>
+        <input type="text" id="f-accountId" placeholder="1" />
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <label for="f-token">Token de Acesso (Chatwoot)</label>
+        </div>
+        <input type="password" id="f-token" placeholder="••••••••••••••••••" />
+      </div>
+
+      <div class="field field-row">
+        <div class="field-label">
+          <label for="f-signMsg">Sign Messages</label>
+          <span class="field-hint">Sign message with chatwoot username</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="f-signMsg" />
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <label for="f-signDelimiter">Sign Delimiter</label>
+        </div>
+        <input type="text" id="f-signDelimiter" placeholder="\n" />
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <label for="f-nameInbox">Name Inbox</label>
+        </div>
+        <input type="text" id="f-nameInbox" placeholder="Nome do inbox" />
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <label for="f-organization">Organization</label>
+        </div>
+        <input type="text" id="f-organization" placeholder="Organização" />
+      </div>
+
+      <div class="field">
+        <div class="field-label">
+          <label for="f-logo">Logo</label>
+        </div>
+        <input type="text" id="f-logo" placeholder="https://.../logo.png" />
+      </div>
+
+      <div class="field field-row">
+        <div class="field-label">
+          <label for="f-conversationPending">Conversation Pending</label>
+          <span class="field-hint">Conversations start as pending</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="f-conversationPending" />
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="field field-row">
+        <div class="field-label">
+          <label for="f-reopenConversation">Reopen Conversation</label>
+          <span class="field-hint">Reopen conversation when receiving message</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="f-reopenConversation" />
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="field field-row">
+        <div class="field-label">
+          <label for="f-importContacts">Import Contacts</label>
+          <span class="field-hint">Import contacts from WhatsApp address book by connecting QR Code</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="f-importContacts" />
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="field field-row">
+        <div class="field-label">
+          <label for="f-importMessages">Import Messages</label>
+          <span class="field-hint">Import messages from WhatsApp by connecting QR Code</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="f-importMessages" />
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <details class="advanced">
+        <summary>Avançado</summary>
+
+        <div class="field">
+          <div class="field-label">
+            <label for="f-daysLimitImportMessages">Days Limit Import Messages</label>
+          </div>
+          <input type="number" id="f-daysLimitImportMessages" min="0" />
+        </div>
+
+        <div class="field">
+          <div class="field-label">
+            <label for="f-number">Number</label>
+          </div>
+          <input type="text" id="f-number" placeholder="5511999999999" />
+        </div>
+
+        <div class="field field-row">
+          <div class="field-label">
+            <label for="f-mergeBrazilContacts">Merge Brazilian Contacts</label>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="f-mergeBrazilContacts" />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="field field-row">
+          <div class="field-label">
+            <label for="f-autoCreate">Auto Create Inbox</label>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="f-autoCreate" />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="field">
+          <div class="field-label">
+            <label for="f-ignoreJids">Ignore Jids (separados por vírgula)</label>
+          </div>
+          <input type="text" id="f-ignoreJids" placeholder="5511999999999@s.whatsapp.net" />
+        </div>
+      </details>
+
+      <div class="field">
+        <div class="field-label">
+          <label>Webhook URL</label>
+          <span class="field-hint">Calculada automaticamente pelo conector</span>
+        </div>
+        <input type="text" id="f-webhookUrl" readonly />
+      </div>
+
+      <div class="form-actions">
+        <button type="submit" class="btn btn-save">Salvar</button>
+        <button type="button" id="btn-delete" class="btn btn-danger">Excluir</button>
+      </div>
+    </form>
+  </main>
+</div>
+
+<script src="static/app.js?v=0.1.8"></script>
+</body>
+</html>
