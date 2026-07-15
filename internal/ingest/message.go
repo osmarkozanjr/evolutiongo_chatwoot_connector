@@ -140,9 +140,23 @@ func (s *Service) handleMessageEvent(ctx context.Context, cfg *model.ChatwootCon
 
 	// Dedup: mensagem já mapeada (inclui o eco fromMe de mensagens enviadas
 	// pelo egress, que salvou o mapping com o id retornado pelo /send/*).
-	if existing, err := s.store.GetMessageByWhatsappID(ctx, cfg.InstanceID, m.ID); err != nil {
+	existing, err := s.store.GetMessageByWhatsappID(ctx, cfg.InstanceID, m.ID)
+	if err != nil {
 		return fmt.Errorf("ingest: erro no dedup da mensagem %s: %w", m.ID, err)
-	} else if existing != nil {
+	}
+	// Corrida egress↔ingest: o evolutiongo publica o eco fromMe na fila
+	// `sendmessage` no mesmo instante em que responde o POST /send/* (verificado
+	// nos logs: "produce sendmessage" ocorre junto com o 200 do /send/text).
+	// Assim o eco pode chegar aqui antes de o egress persistir o mapping
+	// direction=out, e o dedup por id falharia — recriando a mensagem no
+	// Chatwoot como duplicata. Para fromMe sem mapping, aguardamos uma janela
+	// curta re-consultando o lookup; mensagens realmente enviadas por fora
+	// (ex.: pelo celular do agente) não têm mapping, caem no timeout e são
+	// importadas normalmente.
+	if existing == nil && m.FromMe {
+		existing = s.waitForOutMapping(ctx, cfg.InstanceID, m.ID, 3*time.Second)
+	}
+	if existing != nil {
 		return nil
 	}
 
@@ -225,6 +239,27 @@ func (s *Service) handleMessageEvent(ctx context.Context, cfg *model.ChatwootCon
 		s.log.Error("ingest: erro ao salvar mapping de mensagem", "waId", m.ID, "cwId", created.ID, "error", err)
 	}
 	return nil
+}
+
+// waitForOutMapping re-consulta o mapping de uma mensagem fromMe por até
+// maxWait (polling de 100ms), fechando a corrida em que o eco chega antes de o
+// egress persistir o mapping direction=out. Retorna o mapping assim que ele
+// aparecer, ou nil no timeout (mensagem tratada então como enviada por fora).
+func (s *Service) waitForOutMapping(ctx context.Context, instanceID, waID string, maxWait time.Duration) *model.MessageMapping {
+	deadline := time.Now().Add(maxWait)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(100 * time.Millisecond):
+		}
+		if m, err := s.store.GetMessageByWhatsappID(ctx, instanceID, waID); err == nil && m != nil {
+			return m
+		}
+		if time.Now().After(deadline) {
+			return nil
+		}
+	}
 }
 
 // resolveConversation garante contato + conversa no Chatwoot para o chat,
