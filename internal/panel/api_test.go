@@ -116,19 +116,36 @@ var _ store.Store = (*fakeStore)(nil)
 // ---------------------------------------------------------------------
 
 type fakeChatwoot struct {
-	mu             sync.Mutex
-	ensureCalls    int
-	nextInboxID    int
-	failEnsure     error
-	updatedWebhook string
+	mu           sync.Mutex
+	findCalls    int
+	createCalls  int
+	webhookCalls int
+	foundInboxID int // o que FindInboxByName devolve (0 = não achou)
+	nextInboxID  int // o que CreateInbox devolve
+	failFind     error
+	failCreate   error
+	failWebhook  error
+
+	updatedWebhook     string
+	lastWebhookInboxID int
 }
 
-func (f *fakeChatwoot) EnsureInbox(_ context.Context, _ *model.ChatwootConfig, webhookURL string) (int, error) {
+func (f *fakeChatwoot) FindInboxByName(_ context.Context, _ *model.ChatwootConfig, _ string) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.ensureCalls++
-	if f.failEnsure != nil {
-		return 0, f.failEnsure
+	f.findCalls++
+	if f.failFind != nil {
+		return 0, f.failFind
+	}
+	return f.foundInboxID, nil
+}
+
+func (f *fakeChatwoot) CreateInbox(_ context.Context, _ *model.ChatwootConfig, _, webhookURL string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.createCalls++
+	if f.failCreate != nil {
+		return 0, f.failCreate
 	}
 	if f.nextInboxID == 0 {
 		f.nextInboxID = 42
@@ -137,8 +154,15 @@ func (f *fakeChatwoot) EnsureInbox(_ context.Context, _ *model.ChatwootConfig, w
 	return f.nextInboxID, nil
 }
 
-func (f *fakeChatwoot) UpdateInboxWebhook(_ context.Context, _ *model.ChatwootConfig, _ int, webhookURL string) error {
+func (f *fakeChatwoot) UpdateInboxWebhook(_ context.Context, _ *model.ChatwootConfig, inboxID int, webhookURL string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.webhookCalls++
+	if f.failWebhook != nil {
+		return f.failWebhook
+	}
 	f.updatedWebhook = webhookURL
+	f.lastWebhookInboxID = inboxID
 	return nil
 }
 
@@ -279,49 +303,107 @@ func TestSetChatwoot_EnabledSemCamposObrigatoriosFalha(t *testing.T) {
 	}
 }
 
-func TestSetChatwoot_EnabledProvisionaInbox(t *testing.T) {
+// auto-create desligado + inbox JÁ existe (achado pelo nome): usa o existente,
+// sem criar.
+func TestSetChatwoot_UsaInboxExistenteSemCriar(t *testing.T) {
 	h, st, cw := newTestHandler()
+	cw.foundInboxID = 7 // FindInboxByName acha um inbox existente
 	r := newRouter(h)
 
 	body := setRequest{
-		Enabled:   true,
-		URL:       "https://chatwoot.exemplo.com",
-		AccountID: "1",
-		Token:     "tok-123",
-		SignMsg:   boolPtr(true),
-		NameInbox: "Suporte",
+		Enabled:    true,
+		URL:        "https://chatwoot.exemplo.com",
+		AccountID:  "1",
+		Token:      "tok-123",
+		SignMsg:    boolPtr(true),
+		NameInbox:  "Suporte",
+		AutoCreate: false,
 	}
 
 	w := doRequest(t, r, http.MethodPost, "/api/chatwoot/inst-1", "test-apikey", body)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("esperado 201, obtido %d: %s", w.Code, w.Body.String())
 	}
+	if cw.createCalls != 0 {
+		t.Fatalf("não deveria criar inbox quando já existe, mas criou %d vez(es)", cw.createCalls)
+	}
+	var resp findResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json inválido: %v", err)
+	}
+	if resp.InboxID != 7 {
+		t.Fatalf("esperado inboxId=7 (existente), obtido %d", resp.InboxID)
+	}
+	saved, _ := st.GetConfig(context.Background(), "inst-1")
+	if saved == nil || saved.InboxID != 7 {
+		t.Fatalf("esperado InboxID=7 persistido, obtido %+v", saved)
+	}
+}
 
-	if cw.ensureCalls != 1 {
-		t.Fatalf("esperado 1 chamada a EnsureInbox, obtido %d", cw.ensureCalls)
+// auto-create desligado + inbox NÃO existe: NUNCA cria, retorna 422.
+func TestSetChatwoot_SemAutoCreateNaoCriaInbox(t *testing.T) {
+	h, st, cw := newTestHandler()
+	cw.foundInboxID = 0 // não achou
+	r := newRouter(h)
+
+	body := setRequest{
+		Enabled:    true,
+		URL:        "https://chatwoot.exemplo.com",
+		AccountID:  "1",
+		Token:      "tok-123",
+		SignMsg:    boolPtr(true),
+		NameInbox:  "Inexistente",
+		AutoCreate: false,
 	}
 
+	w := doRequest(t, r, http.MethodPost, "/api/chatwoot/inst-1", "test-apikey", body)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("esperado 422 (não cria sem auto-create), obtido %d: %s", w.Code, w.Body.String())
+	}
+	if cw.createCalls != 0 {
+		t.Fatalf("não deveria criar inbox com auto-create off, mas criou %d vez(es)", cw.createCalls)
+	}
+	// Config permanece salva mesmo com falha de provisionamento.
+	if saved, _ := st.GetConfig(context.Background(), "inst-1"); saved == nil {
+		t.Fatalf("esperado config salva mesmo com provisionamento recusado")
+	}
+}
+
+// auto-create ligado + inbox NÃO existe: cria.
+func TestSetChatwoot_AutoCreateCriaInbox(t *testing.T) {
+	h, st, cw := newTestHandler()
+	cw.foundInboxID = 0 // não achou
+	r := newRouter(h)
+
+	body := setRequest{
+		Enabled:    true,
+		URL:        "https://chatwoot.exemplo.com",
+		AccountID:  "1",
+		Token:      "tok-123",
+		SignMsg:    boolPtr(true),
+		NameInbox:  "Suporte",
+		AutoCreate: true,
+	}
+
+	w := doRequest(t, r, http.MethodPost, "/api/chatwoot/inst-1", "test-apikey", body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("esperado 201, obtido %d: %s", w.Code, w.Body.String())
+	}
+	if cw.createCalls != 1 {
+		t.Fatalf("esperado 1 chamada a CreateInbox, obtido %d", cw.createCalls)
+	}
 	var resp findResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("json inválido: %v", err)
 	}
 	if resp.InboxID != 42 {
-		t.Fatalf("esperado inboxId=42, obtido %d", resp.InboxID)
+		t.Fatalf("esperado inboxId=42 (criado), obtido %d", resp.InboxID)
 	}
-	wantWebhook := "https://evoconnector.iceasa.com.br/chatwoot/webhook/inst-1"
-	if resp.WebhookURL != wantWebhook {
-		t.Fatalf("webhook_url esperado %q, obtido %q", wantWebhook, resp.WebhookURL)
-	}
-
-	saved, err := st.GetConfig(context.Background(), "inst-1")
-	if err != nil {
-		t.Fatalf("GetConfig: %v", err)
-	}
+	saved, _ := st.GetConfig(context.Background(), "inst-1")
 	if saved == nil || saved.InboxID != 42 {
 		t.Fatalf("esperado InboxID=42 persistido, obtido %+v", saved)
 	}
 
-	// GET /api/instances deve listar a instância habilitada.
 	wList := doRequest(t, r, http.MethodGet, "/api/instances", "test-apikey", nil)
 	var list []instanceSummary
 	if err := json.Unmarshal(wList.Body.Bytes(), &list); err != nil {
@@ -332,9 +414,46 @@ func TestSetChatwoot_EnabledProvisionaInbox(t *testing.T) {
 	}
 }
 
+// re-save de instância JÁ vinculada a um inbox: reutiliza o InboxID salvo,
+// nunca procura/cria por nome (impossível duplicar em rename). RAIZ do incidente.
+func TestSetChatwoot_ReSaveReutilizaInboxID(t *testing.T) {
+	h, st, cw := newTestHandler()
+	r := newRouter(h)
+
+	// Pré-condição: config já salva com InboxID=99.
+	_ = st.SaveConfig(context.Background(), &model.ChatwootConfig{
+		InstanceID: "inst-1", Enabled: true, URL: "https://chatwoot.exemplo.com",
+		AccountID: "1", Token: "tok", NameInbox: "Nome Antigo", InboxID: 99,
+	})
+
+	// Re-save mudando o nome do inbox (remanejo): não pode criar/duplicar.
+	body := setRequest{
+		Enabled:   true,
+		URL:       "https://chatwoot.exemplo.com",
+		AccountID: "1",
+		Token:     "tok",
+		SignMsg:   boolPtr(true),
+		NameInbox: "Nome Novo",
+	}
+	w := doRequest(t, r, http.MethodPost, "/api/chatwoot/inst-1", "test-apikey", body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("esperado 201, obtido %d: %s", w.Code, w.Body.String())
+	}
+	if cw.findCalls != 0 || cw.createCalls != 0 {
+		t.Fatalf("re-save não deveria procurar/criar inbox; find=%d create=%d", cw.findCalls, cw.createCalls)
+	}
+	if cw.lastWebhookInboxID != 99 {
+		t.Fatalf("esperado webhook atualizado no inbox 99 (reutilizado), obtido %d", cw.lastWebhookInboxID)
+	}
+	saved, _ := st.GetConfig(context.Background(), "inst-1")
+	if saved == nil || saved.InboxID != 99 {
+		t.Fatalf("esperado InboxID=99 mantido, obtido %+v", saved)
+	}
+}
+
 func TestSetChatwoot_ProvisionamentoFalhaRetorna422(t *testing.T) {
 	h, st, cw := newTestHandler()
-	cw.failEnsure = errors.New("chatwoot indisponível")
+	cw.failFind = errors.New("chatwoot indisponível")
 	r := newRouter(h)
 
 	body := setRequest{
@@ -370,8 +489,8 @@ func TestSetChatwoot_DisabledNaoProvisiona(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("esperado 201, obtido %d: %s", w.Code, w.Body.String())
 	}
-	if cw.ensureCalls != 0 {
-		t.Fatalf("esperado 0 chamadas a EnsureInbox quando enabled=false, obtido %d", cw.ensureCalls)
+	if cw.findCalls != 0 || cw.createCalls != 0 || cw.webhookCalls != 0 {
+		t.Fatalf("esperado 0 chamadas ao Chatwoot quando enabled=false; find=%d create=%d webhook=%d", cw.findCalls, cw.createCalls, cw.webhookCalls)
 	}
 
 	saved, _ := st.GetConfig(context.Background(), "inst-3")

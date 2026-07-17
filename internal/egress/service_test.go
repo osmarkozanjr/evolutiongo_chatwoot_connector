@@ -116,7 +116,10 @@ type fakeCw struct {
 	created []createdMessage
 }
 
-func (f *fakeCw) EnsureInbox(ctx context.Context, cfg *model.ChatwootConfig, webhookURL string) (int, error) {
+func (f *fakeCw) FindInboxByName(ctx context.Context, cfg *model.ChatwootConfig, name string) (int, error) {
+	return 0, nil
+}
+func (f *fakeCw) CreateInbox(ctx context.Context, cfg *model.ChatwootConfig, name, webhookURL string) (int, error) {
 	return 0, nil
 }
 func (f *fakeCw) UpdateInboxWebhook(ctx context.Context, cfg *model.ChatwootConfig, inboxID int, webhookURL string) error {

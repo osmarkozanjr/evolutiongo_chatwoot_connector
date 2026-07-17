@@ -114,6 +114,12 @@ func (c *HTTPClient) do(ctx context.Context, cfg *model.ChatwootConfig, method, 
 	const maxAttempts = 3
 	var lastErr error
 
+	// Só re-tenta métodos idempotentes. POST (criar conversa/mensagem/contato)
+	// NÃO é idempotente: em 5xx (o Chatwoot às vezes CRIA o recurso e falha ao
+	// renderizar a resposta) ou erro de rede, um retry duplicaria o recurso —
+	// foi o que multiplicou conversas no incidente. Para POST, falha na 1ª.
+	idempotent := method != http.MethodPost
+
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, method, url, bodyFn())
 		if err != nil {
@@ -128,7 +134,7 @@ func (c *HTTPClient) do(ctx context.Context, cfg *model.ChatwootConfig, method, 
 		resp, err := c.http.Do(req)
 		if err != nil {
 			lastErr = fmt.Errorf("chatwoot: request %s %s: %w", method, url, err)
-			if attempt < maxAttempts {
+			if idempotent && attempt < maxAttempts {
 				time.Sleep(time.Duration(attempt) * 300 * time.Millisecond)
 				continue
 			}
@@ -140,7 +146,7 @@ func (c *HTTPClient) do(ctx context.Context, cfg *model.ChatwootConfig, method, 
 
 		if resp.StatusCode >= 500 {
 			lastErr = &APIError{StatusCode: resp.StatusCode, Method: method, URL: url, Body: string(respBody)}
-			if attempt < maxAttempts {
+			if idempotent && attempt < maxAttempts {
 				time.Sleep(time.Duration(attempt) * 300 * time.Millisecond)
 				continue
 			}
@@ -165,16 +171,15 @@ type inboxListDTO struct {
 	Payload []inboxDTO `json:"payload"`
 }
 
-// EnsureInbox provisiona um inbox de canal API (porta de initInstanceChatwoot).
-// GET inboxes → se já existe pelo nome, reutiliza; senão POST inboxes com
-// channel {type:"api", webhook_url}.
-func (c *HTTPClient) EnsureInbox(ctx context.Context, cfg *model.ChatwootConfig, webhookURL string) (int, error) {
-	name := cfg.NameInbox
+// FindInboxByName procura um inbox existente pelo nome (GET inboxes) e devolve
+// seu id, ou 0 se não existir. NUNCA cria — a criação é decidida pelo chamador
+// (provision) conforme a flag auto-create. Separar busca de criação evita que
+// um rename/remanejo de inbox no Chatwoot faça o conector recriar um inbox
+// duplicado (causa raiz do incidente de duplicação de conversas).
+func (c *HTTPClient) FindInboxByName(ctx context.Context, cfg *model.ChatwootConfig, name string) (int, error) {
 	if name == "" {
 		name = cfg.InstanceName
 	}
-
-	// Evita duplicata pelo nome (checkDuplicate em initInstanceChatwoot).
 	var list inboxListDTO
 	if err := c.doJSON(ctx, cfg, http.MethodGet, "/inboxes", nil, &list); err != nil {
 		return 0, err
@@ -184,9 +189,15 @@ func (c *HTTPClient) EnsureInbox(ctx context.Context, cfg *model.ChatwootConfig,
 			return ib.ID, nil
 		}
 	}
+	return 0, nil
+}
 
-	// Cria inbox de canal API. Shape verificado em initInstanceChatwoot():
-	// data: { name, channel: { type: 'api', webhook_url } }
+// CreateInbox cria um inbox de canal API (POST inboxes). Shape verificado em
+// initInstanceChatwoot(): data: { name, channel: { type: 'api', webhook_url } }.
+func (c *HTTPClient) CreateInbox(ctx context.Context, cfg *model.ChatwootConfig, name, webhookURL string) (int, error) {
+	if name == "" {
+		name = cfg.InstanceName
+	}
 	reqBody := map[string]any{
 		"name": name,
 		"channel": map[string]any{

@@ -24,6 +24,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -34,6 +35,12 @@ import (
 	"github.com/iceasa/evolution-chatwoot-connector/internal/chatwoot"
 	"github.com/iceasa/evolution-chatwoot-connector/internal/model"
 )
+
+// isNotFound indica que o erro é um APIError 404 do Chatwoot (recurso removido).
+func isNotFound(err error) bool {
+	var apiErr *chatwoot.APIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound
+}
 
 // waMessage é a visão normalizada do payload de Message/SendMessage.
 //
@@ -224,7 +231,29 @@ func (s *Service) handleMessageEvent(ctx context.Context, cfg *model.ChatwootCon
 	sourceID := "WAID:" + m.ID
 	created, err := s.cw.CreateMessage(ctx, cfg, conv.ChatwootConversationID, content, messageType, attachments, sourceID)
 	if err != nil {
-		return fmt.Errorf("ingest: erro ao criar mensagem no chatwoot (conv %d): %w", conv.ChatwootConversationID, err)
+		// Conversa apagada no Chatwoot (404): o mapping local aponta para uma
+		// conversa que não existe mais (ex.: operador removeu conversas/inbox).
+		// Invalida o mapping, re-resolve (acha a aberta ou cria nova) e tenta
+		// uma vez mais, em vez de bater eternamente na conversa fantasma e
+		// descartar a mensagem após esgotar as tentativas do RabbitMQ.
+		if isNotFound(err) {
+			s.log.Warn("ingest: conversa não existe mais no chatwoot (404), invalidando mapping e recriando",
+				"conversationId", conv.ChatwootConversationID, "remoteJid", m.RemoteJid)
+			if derr := s.store.DeleteConversation(ctx, cfg.InstanceID, m.RemoteJid); derr != nil {
+				s.log.Warn("ingest: falha ao invalidar mapping de conversa", "remoteJid", m.RemoteJid, "error", derr)
+			}
+			conv, err = s.resolveConversation(ctx, cfg, ev, m)
+			if err != nil {
+				return err
+			}
+			if conv == nil {
+				return nil
+			}
+			created, err = s.cw.CreateMessage(ctx, cfg, conv.ChatwootConversationID, content, messageType, attachments, sourceID)
+		}
+		if err != nil {
+			return fmt.Errorf("ingest: erro ao criar mensagem no chatwoot (conv %d): %w", conv.ChatwootConversationID, err)
+		}
 	}
 
 	mapping := &model.MessageMapping{

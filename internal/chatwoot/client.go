@@ -45,7 +45,8 @@ type Attachment struct {
 // (header api_access_token).
 type Client interface {
 	// Inboxes
-	EnsureInbox(ctx context.Context, cfg *model.ChatwootConfig, webhookURL string) (inboxID int, err error)
+	FindInboxByName(ctx context.Context, cfg *model.ChatwootConfig, name string) (inboxID int, err error) // 0 se não existir
+	CreateInbox(ctx context.Context, cfg *model.ChatwootConfig, name, webhookURL string) (inboxID int, err error)
 	UpdateInboxWebhook(ctx context.Context, cfg *model.ChatwootConfig, inboxID int, webhookURL string) error
 
 	// Contatos

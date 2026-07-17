@@ -13,6 +13,9 @@
   const state = {
     apikey: localStorage.getItem(LS_KEY) || "",
     currentId: null,
+    // nomes reais das instâncias do evolutiongo (id -> nome), para exibir e
+    // persistir o nome em vez do UUID.
+    names: {},
   };
 
   function ensureApikey() {
@@ -112,6 +115,8 @@
 
     const byId = new Map();
     evoInstances.forEach((it) => {
+      // guarda o nome REAL da instância do evolutiongo para usar ao salvar.
+      if (it.instanceName) state.names[it.instanceId] = it.instanceName;
       byId.set(it.instanceId, {
         instanceId: it.instanceId,
         instanceName: it.instanceName || it.instanceId,
@@ -126,7 +131,11 @@
       };
       cur.enabled = !!cfg.enabled;
       cur.configured = true;
-      if (cfg.instanceName) cur.instanceName = cfg.instanceName;
+      // Só usa o nome salvo se for um nome REAL (configs antigas gravaram o
+      // UUID como nome); nesse caso mantém o nome do evolutiongo já definido.
+      if (cfg.instanceName && cfg.instanceName !== cfg.instanceId) {
+        cur.instanceName = cfg.instanceName;
+      }
       byId.set(cfg.instanceId, cur);
     });
 
@@ -189,7 +198,9 @@
   }
 
   function clearForm(instanceId) {
-    fillForm({ instanceId: instanceId || "" });
+    // Instância nova já vem com Enabled marcado por padrão (é o caso comum:
+    // quem abre a config quer habilitar a integração).
+    fillForm({ instanceId: instanceId || "", enabled: true });
     el("panel-title").textContent = instanceId ? "Chatwoot — " + instanceId : "Chatwoot — nova instância";
   }
 
@@ -199,8 +210,11 @@
       .map((s) => s.trim())
       .filter(Boolean);
 
+    const instanceId = el("f-instanceId").value.trim();
     return {
-      instanceName: el("f-instanceId").value,
+      // Nome REAL da instância (do evolutiongo); nunca o UUID. Antes gravava o
+      // id como nome, e a lista passava a mostrar o UUID após salvar.
+      instanceName: state.names[instanceId] || instanceId,
       enabled: el("f-enabled").checked,
       url: el("f-url").value.trim(),
       accountId: el("f-accountId").value.trim(),
