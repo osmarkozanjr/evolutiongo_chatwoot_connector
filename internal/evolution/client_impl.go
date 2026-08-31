@@ -229,3 +229,12 @@ func (c *HTTPClient) CheckNumber(ctx context.Context, instanceToken, number stri
 	}
 	return jid, u.IsInWhatsapp, nil
 }
+
+// DeleteMessage revoga uma mensagem para todos (POST /message/delete).
+// Corpo: { chat, messageId } — contrato de
+// https://docs.evolutionfoundation.com.br/evolution-go/delete-a-message-for-everyone
+func (c *HTTPClient) DeleteMessage(ctx context.Context, instanceToken, chat, messageID string) error {
+	reqBody := map[string]any{"chat": chat, "messageId": messageID}
+	_, err := c.postJSON(ctx, instanceToken, "/message/delete", reqBody)
+	return err
+}

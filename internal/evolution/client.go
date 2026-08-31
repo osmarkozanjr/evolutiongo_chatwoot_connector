@@ -46,4 +46,8 @@ type Client interface {
 	FetchProfilePicture(ctx context.Context, instanceToken, number string) (url string, err error)
 	// CheckNumber valida/normaliza um número no WhatsApp (POST /user/check).
 	CheckNumber(ctx context.Context, instanceToken, number string) (jid string, exists bool, err error)
+	// DeleteMessage revoga uma mensagem para todos (POST /message/delete).
+	// chat é o destino da conversa (mesmo valor usado em TextMessage.Number) e
+	// messageID é o key.id do WhatsApp.
+	DeleteMessage(ctx context.Context, instanceToken, chat, messageID string) error
 }

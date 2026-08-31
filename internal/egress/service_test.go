@@ -80,11 +80,19 @@ type sentMedia struct {
 	msg   *evolution.MediaMessage
 }
 
+type deletedMessage struct {
+	token     string
+	chat      string
+	messageID string
+}
+
 type fakeEvo struct {
-	texts   []sentText
-	medias  []sentMedia
-	textErr error
-	nextID  string
+	texts     []sentText
+	medias    []sentMedia
+	deletes   []deletedMessage
+	textErr   error
+	deleteErr error
+	nextID    string
 }
 
 func (f *fakeEvo) SendText(ctx context.Context, token string, msg *evolution.TextMessage) (*evolution.SendResult, error) {
@@ -103,6 +111,13 @@ func (f *fakeEvo) FetchProfilePicture(ctx context.Context, token, number string)
 }
 func (f *fakeEvo) CheckNumber(ctx context.Context, token, number string) (string, bool, error) {
 	return number, true, nil
+}
+func (f *fakeEvo) DeleteMessage(ctx context.Context, token, chat, messageID string) error {
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
+	f.deletes = append(f.deletes, deletedMessage{token, chat, messageID})
+	return nil
 }
 
 type createdMessage struct {
@@ -476,5 +491,51 @@ func TestHandlerRespondsBot(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("payload inválido: status = %d", w.Code)
+	}
+}
+
+func TestHandleWebhookMessageDeletedRevokesOnWhatsapp(t *testing.T) {
+	st := &fakeStore{
+		cfg: enabledConfig(),
+		msgsByCwID: map[int]*model.MessageMapping{
+			4567: {InstanceID: "inst-1", WhatsappMessageID: "3EB0WA1", ChatwootMessageID: 4567, Direction: "out"},
+		},
+	}
+	evo := &fakeEvo{}
+	svc := newTestService(st, &fakeCw{}, evo)
+
+	p := outgoingPayload()
+	p.Event = "message_updated"
+	p.ContentAttributes = &ContentAttributes{Deleted: true}
+
+	if err := svc.HandleWebhook(context.Background(), "inst-1", p); err != nil {
+		t.Fatalf("HandleWebhook: %v", err)
+	}
+	if len(evo.deletes) != 1 {
+		t.Fatalf("esperado 1 revogação, houve %d", len(evo.deletes))
+	}
+	got := evo.deletes[0]
+	if got.chat != "5582988887777@s.whatsapp.net" || got.messageID != "3EB0WA1" || got.token != "instance-token" {
+		t.Errorf("delete = %+v", got)
+	}
+	if len(evo.texts) != 0 {
+		t.Errorf("deleção não deveria enviar texto; enviou %d", len(evo.texts))
+	}
+}
+
+func TestHandleWebhookMessageDeletedWithoutMappingIsNoop(t *testing.T) {
+	st := &fakeStore{cfg: enabledConfig()}
+	evo := &fakeEvo{}
+	svc := newTestService(st, &fakeCw{}, evo)
+
+	p := outgoingPayload()
+	p.Event = "message_updated"
+	p.ContentAttributes = &ContentAttributes{Deleted: true}
+
+	if err := svc.HandleWebhook(context.Background(), "inst-1", p); err != nil {
+		t.Fatalf("HandleWebhook: %v", err)
+	}
+	if len(evo.deletes) != 0 {
+		t.Errorf("sem mapping não deveria revogar; revogou %d", len(evo.deletes))
 	}
 }

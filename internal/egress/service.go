@@ -16,12 +16,6 @@
 //   private: true. A interface atual não expõe o flag. Mitigação temporária:
 //   enviamos a mensagem de erro com source_id prefixado "WAID:" para que o
 //   próprio webhook a ignore como echo (mesmo mecanismo de dedup do antigo).
-//
-// INTERFACE-CHANGE-REQUEST: evolution.Client.DeleteMessage(...)
-//   Para message_updated com content_attributes.deleted o antigo envia a
-//   revogação (sendMessage {delete: key}). O evolutiongo TEM o endpoint
-//   POST /message/delete (verificado em routes.go → DeleteMessageEveryone),
-//   mas evolution.Client não o expõe; sem mudança de interface só registramos.
 package egress
 
 import (
@@ -110,13 +104,20 @@ func (s *Service) HandleWebhook(ctx context.Context, instanceID string, p *Webho
 		if err != nil {
 			return fmt.Errorf("egress: lookup deleted message %d: %w", p.ID, err)
 		}
-		if mapping != nil {
-			// TODO(VERIFY): revogação não enviada — o evolutiongo expõe
-			// POST /message/delete (routes.go: DeleteMessageEveryone), mas
-			// evolution.Client não tem método para isso. Ver
-			// INTERFACE-CHANGE-REQUEST no topo do arquivo.
-			s.log.Warn("egress: message deleted in chatwoot; revoke not sent (interface gap)",
-				"instanceId", instanceID, "chatwootMessageId", p.ID, "waMessageId", mapping.WhatsappMessageID)
+		if mapping == nil {
+			// Mensagem sem correlação no WhatsApp (ex.: nota criada só no
+			// Chatwoot): nada a revogar.
+			return nil
+		}
+		if chatID == "" {
+			return fmt.Errorf("egress: conversation %d sem remoteJid para revogar mensagem %d", p.Conversation.ID, p.ID)
+		}
+		token, err := s.tokens(ctx, instanceID)
+		if err != nil {
+			return fmt.Errorf("egress: resolve token %s: %w", instanceID, err)
+		}
+		if err := s.evo.DeleteMessage(ctx, token, chatID, mapping.WhatsappMessageID); err != nil {
+			return fmt.Errorf("egress: revoke message %s: %w", mapping.WhatsappMessageID, err)
 		}
 		return nil
 	}
