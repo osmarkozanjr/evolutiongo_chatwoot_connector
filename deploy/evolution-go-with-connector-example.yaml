@@ -30,7 +30,7 @@ services:
       - source: inject_menu_sh
         target: /patch/inject-menu.sh
         mode: 0755
-      - source: connector_menu_js_v3
+      - source: connector_menu_js
         target: /patch/connector-menu.js
         mode: 0644
     networks:
@@ -196,8 +196,8 @@ volumes:
 
 # Configs EXTERNOS: crie-os uma vez no servidor (manager) ANTES do deploy —
 # necessário para deploy via Portainer, que não tem acesso aos arquivos locais:
-#   docker config create inject_menu_sh       connector/deploy/inject-menu.sh
-#   docker config create connector_menu_js connector/deploy/connector-menu.js
+#   docker config create inject_menu_sh       deploy/inject-menu.sh
+#   docker config create connector_menu_js deploy/connector-menu.js
 # Configs são IMUTÁVEIS e o `docker config rm` é bloqueado enquanto um
 # service os usa. Para atualizar o conteúdo (ver README, "Atualizando o
 # injetor"): remova o service que os usa (docker service rm
