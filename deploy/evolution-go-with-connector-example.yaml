@@ -98,6 +98,11 @@ services:
 
   rabbitmq:
     image: rabbitmq:3.13-management-alpine
+    # Hostname fixo: o RabbitMQ guarda os dados em mnesia/rabbit@<hostname>, e no
+    # Swarm cada task nova ganha hostname aleatório — sem isto, todo restart do
+    # service sobe um nó vazio e as mensagens em fila se perdem (o volume guarda
+    # os dados do nó antigo, mas ninguém os lê).
+    hostname: rabbitmq
     networks:
       - minha_rede
     environment:
