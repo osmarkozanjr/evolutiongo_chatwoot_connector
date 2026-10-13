@@ -50,10 +50,11 @@ func quorumQueueArgs() amqp.Table {
 // RabbitMQConsumer implementa Consumer com reconexão automática e backoff
 // exponencial. Subscribe deve ser chamado antes de Start.
 type RabbitMQConsumer struct {
-	url         string
-	maxAttempts int
-	prefetch    int
-	log         *slog.Logger
+	url           string
+	maxAttempts   int
+	prefetch      int
+	queuePrefetch map[string]int
+	log           *slog.Logger
 
 	mu       sync.Mutex
 	handlers map[string]Handler
@@ -85,6 +86,17 @@ func WithPrefetch(n int) RabbitMQOption {
 	}
 }
 
+// WithQueuePrefetch sobrescreve o prefetch de uma fila específica. Filas de
+// handler lento (ex. historysync) devem usar 1: entregas paradas no buffer do
+// cliente contam para o consumer_timeout do broker, que fecha o canal.
+func WithQueuePrefetch(queue string, n int) RabbitMQOption {
+	return func(c *RabbitMQConsumer) {
+		if n > 0 {
+			c.queuePrefetch[queue] = n
+		}
+	}
+}
+
 // WithLogger define o logger (default slog.Default()).
 func WithLogger(l *slog.Logger) RabbitMQOption {
 	return func(c *RabbitMQConsumer) {
@@ -98,11 +110,12 @@ func WithLogger(l *slog.Logger) RabbitMQOption {
 // (ex. amqp://admin:admin@rabbitmq:5672/ — CONNECTOR_AMQP_URL).
 func NewRabbitMQConsumer(url string, opts ...RabbitMQOption) *RabbitMQConsumer {
 	c := &RabbitMQConsumer{
-		url:         url,
-		maxAttempts: defaultMaxAttempts,
-		prefetch:    defaultPrefetch,
-		log:         slog.Default(),
-		handlers:    map[string]Handler{},
+		url:           url,
+		maxAttempts:   defaultMaxAttempts,
+		prefetch:      defaultPrefetch,
+		queuePrefetch: map[string]int{},
+		log:           slog.Default(),
+		handlers:      map[string]Handler{},
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -208,16 +221,26 @@ func (c *RabbitMQConsumer) runSession(ctx context.Context) error {
 		}
 	}()
 
-	ch, err := conn.Channel()
-	if err != nil {
-		return fmt.Errorf("transport: falha ao abrir canal: %w", err)
-	}
-	if err := ch.Qos(c.prefetch, 0, false); err != nil {
-		return fmt.Errorf("transport: falha ao configurar QoS: %w", err)
-	}
-
+	// Um canal por fila: um erro de canal (ex. consumer_timeout do broker por
+	// ack atrasado) não derruba as demais filas, e o prefetch fica isolado.
+	// Qualquer canal fechado encerra a sessão para reconectar tudo — o broker
+	// fecha só o canal, mantendo a conexão viva, e sem esse aviso o consumer
+	// ficava parado (0 consumers) sem nunca reconectar.
+	chanClosed := make(chan error, len(handlers))
 	var wg sync.WaitGroup
 	for queue, handler := range handlers {
+		ch, err := conn.Channel()
+		if err != nil {
+			return fmt.Errorf("transport: falha ao abrir canal da fila %s: %w", queue, err)
+		}
+		prefetch := c.prefetch
+		if n, ok := c.queuePrefetch[queue]; ok {
+			prefetch = n
+		}
+		if err := ch.Qos(prefetch, 0, false); err != nil {
+			return fmt.Errorf("transport: falha ao configurar QoS da fila %s: %w", queue, err)
+		}
+
 		if _, err := ch.QueueDeclare(
 			queue, // name
 			true,  // durable
@@ -230,17 +253,23 @@ func (c *RabbitMQConsumer) runSession(ctx context.Context) error {
 		}
 
 		deliveries, err := ch.Consume(
-			queue,                              // queue
-			"evochatwoot-connector-"+queue,     // consumer tag
-			false,                              // auto-ack (fazemos ack manual)
-			false,                              // exclusive
-			false,                              // no-local
-			false,                              // no-wait
-			nil,                                // args
+			queue,                          // queue
+			"evochatwoot-connector-"+queue, // consumer tag
+			false,                          // auto-ack (fazemos ack manual)
+			false,                          // exclusive
+			false,                          // no-local
+			false,                          // no-wait
+			nil,                            // args
 		)
 		if err != nil {
 			return fmt.Errorf("transport: falha ao consumir fila %s: %w", queue, err)
 		}
+
+		go func(queue string, closeCh <-chan *amqp.Error) {
+			if amqpErr, ok := <-closeCh; ok && amqpErr != nil {
+				chanClosed <- fmt.Errorf("transport: canal da fila %s fechado pelo broker: %w", queue, amqpErr)
+			}
+		}(queue, ch.NotifyClose(make(chan *amqp.Error, 1)))
 
 		wg.Add(1)
 		go func(queue string, h Handler, deliveries <-chan amqp.Delivery) {
@@ -257,13 +286,14 @@ func (c *RabbitMQConsumer) runSession(ctx context.Context) error {
 	var sessionErr error
 	select {
 	case <-ctx.Done():
-		_ = conn.Close()
 	case amqpErr, ok := <-closeCh:
 		if ok && amqpErr != nil {
 			sessionErr = fmt.Errorf("transport: conexão fechada pelo broker: %w", amqpErr)
 		}
+	case sessionErr = <-chanClosed:
 	}
-	// Os canais de delivery fecham junto com a conexão.
+	// Fechar a conexão fecha todos os canais e, com eles, os de delivery.
+	_ = conn.Close()
 	wg.Wait()
 	return sessionErr
 }

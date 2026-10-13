@@ -108,6 +108,16 @@ func (e *APIError) isIdentifierTaken() bool {
 		strings.Contains(e.Body, "Identifier has already been taken")
 }
 
+// IsTooManyMessages indica o 422 "Too many messages" da proteção anti-flood
+// do Chatwoot (limite de mensagens por conversa por minuto). Passa após
+// alguns segundos, então quem recebe deve esperar e tentar de novo.
+func IsTooManyMessages(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) &&
+		apiErr.StatusCode == http.StatusUnprocessableEntity &&
+		strings.Contains(apiErr.Body, "Too many messages")
+}
+
 // do executa a requisição HTTP com retry leve em 5xx e devolve o corpo bruto.
 // bodyFn é chamado a cada tentativa para reabrir o reader.
 func (c *HTTPClient) do(ctx context.Context, cfg *model.ChatwootConfig, method, url, contentType string, bodyFn func() io.Reader) ([]byte, error) {

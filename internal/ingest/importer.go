@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/iceasa/evolution-chatwoot-connector/internal/chatwoot"
 	"github.com/iceasa/evolution-chatwoot-connector/internal/model"
 )
 
@@ -245,6 +246,13 @@ func parseWebMessageInfo(remoteJid string, wmi map[string]any) *waMessage {
 	return m
 }
 
+// Espera entre tentativas quando o Chatwoot responde "Too many messages".
+// Variável para os testes poderem encurtar.
+var (
+	floodRetryDelay = 15 * time.Second
+	floodMaxRetries = 6
+)
+
 // importHistoryMessage cria a mensagem histórica no Chatwoot reutilizando os
 // mesmos blocos do fluxo normal (dedup, contato, conversa, conteúdo), porém
 // sem download de mídia (histórico importa só o texto/caption, como o
@@ -282,6 +290,16 @@ func (s *Service) importHistoryMessage(ctx context.Context, cfg *model.ChatwootC
 	}
 
 	created, err := s.cw.CreateMessage(ctx, cfg, conv.ChatwootConversationID, content, messageType, nil, "WAID:"+m.ID)
+	// O histórico despeja centenas de mensagens na mesma conversa em segundos
+	// e esbarra no anti-flood por minuto do Chatwoot; espera a janela andar.
+	for attempt := 0; chatwoot.IsTooManyMessages(err) && attempt < floodMaxRetries; attempt++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(floodRetryDelay):
+		}
+		created, err = s.cw.CreateMessage(ctx, cfg, conv.ChatwootConversationID, content, messageType, nil, "WAID:"+m.ID)
+	}
 	if err != nil {
 		return err
 	}

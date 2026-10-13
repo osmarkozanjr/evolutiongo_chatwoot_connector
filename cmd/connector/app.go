@@ -56,7 +56,11 @@ func buildApp(ctx context.Context, cfg *config.Config) (*app, error) {
 
 	// Ingest: eventos do evolutiongo via RabbitMQ (filas globais).
 	ingestSvc := ingest.New(st, cw, evo, locker, logger)
-	consumer := transport.NewRabbitMQConsumer(cfg.AMQPURL, transport.WithLogger(logger))
+	consumer := transport.NewRabbitMQConsumer(cfg.AMQPURL,
+		transport.WithLogger(logger),
+		// historysync leva minutos por evento; com prefetch alto as entregas
+		// paradas no buffer estouram o consumer_timeout do broker.
+		transport.WithQueuePrefetch("historysync", 1))
 	ingestSvc.Register(consumer)
 
 	// Egress: webhook do Chatwoot → /send/* do evolutiongo. O token da
