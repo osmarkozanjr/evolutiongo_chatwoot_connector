@@ -21,6 +21,8 @@ type Store interface {
 	// Contatos
 	GetContact(ctx context.Context, instanceID, remoteJid string) (*model.ContactMapping, error)
 	SaveContact(ctx context.Context, m *model.ContactMapping) error
+	// DeleteContact remove o mapeamento (ex.: contato excluído/mesclado no Chatwoot).
+	DeleteContact(ctx context.Context, instanceID, remoteJid string) error
 
 	// Conversas
 	GetConversation(ctx context.Context, instanceID, remoteJid string) (*model.ConversationMapping, error)

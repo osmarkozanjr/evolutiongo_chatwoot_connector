@@ -344,6 +344,25 @@ func (s *Service) resolveConversation(ctx context.Context, cfg *model.ChatwootCo
 	// Conversa aberta existente no inbox (fallback quando o mapping local não
 	// existe — ex. conversa criada antes do conector).
 	conv, err := s.cw.GetOpenConversation(ctx, cfg, contact.ChatwootContactID, cfg.InboxID)
+	if err != nil && isNotFound(err) {
+		// Contato apagado/mesclado no Chatwoot (404): o mapping local aponta
+		// para um contact_id que não existe mais. Invalida o mapping, re-resolve
+		// o contato (busca pelo identifier ou cria) e tenta uma vez mais, em vez
+		// de descartar a mensagem após esgotar as tentativas do RabbitMQ.
+		s.log.Warn("ingest: contato não existe mais no chatwoot (404), invalidando mapping e recriando",
+			"contactId", contact.ChatwootContactID, "remoteJid", m.RemoteJid)
+		if derr := s.store.DeleteContact(ctx, cfg.InstanceID, m.RemoteJid); derr != nil {
+			s.log.Warn("ingest: falha ao invalidar mapping de contato", "remoteJid", m.RemoteJid, "error", derr)
+		}
+		contact, err = s.resolveContact(ctx, cfg, ev, m)
+		if err != nil {
+			return nil, err
+		}
+		if contact == nil {
+			return nil, nil
+		}
+		conv, err = s.cw.GetOpenConversation(ctx, cfg, contact.ChatwootContactID, cfg.InboxID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("ingest: erro ao buscar conversa aberta: %w", err)
 	}

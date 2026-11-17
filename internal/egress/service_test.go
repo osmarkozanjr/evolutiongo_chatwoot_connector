@@ -41,6 +41,9 @@ func (f *fakeStore) GetContact(ctx context.Context, instanceID, remoteJid string
 	return nil, nil
 }
 func (f *fakeStore) SaveContact(ctx context.Context, m *model.ContactMapping) error { return nil }
+func (f *fakeStore) DeleteContact(ctx context.Context, instanceID, remoteJid string) error {
+	return nil
+}
 func (f *fakeStore) GetConversation(ctx context.Context, instanceID, remoteJid string) (*model.ConversationMapping, error) {
 	return nil, nil
 }

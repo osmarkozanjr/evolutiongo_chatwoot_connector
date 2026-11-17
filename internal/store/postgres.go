@@ -308,6 +308,14 @@ func (p *Postgres) SaveContact(ctx context.Context, m *model.ContactMapping) err
 	return err
 }
 
+// DeleteContact remove o mapeamento de contato.
+func (p *Postgres) DeleteContact(ctx context.Context, instanceID, remoteJid string) error {
+	_, err := p.pool.Exec(ctx, `
+		DELETE FROM contact_mappings WHERE instance_id = $1 AND remote_jid = $2
+	`, instanceID, remoteJid)
+	return err
+}
+
 // ---------------------------------------------------------------------------
 // Conversas (conversation_mappings)
 // ---------------------------------------------------------------------------

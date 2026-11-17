@@ -38,6 +38,7 @@ func (f *fakeStore) GetContact(context.Context, string, string) (*model.ContactM
 	return nil, nil
 }
 func (f *fakeStore) SaveContact(context.Context, *model.ContactMapping) error { return nil }
+func (f *fakeStore) DeleteContact(context.Context, string, string) error      { return nil }
 func (f *fakeStore) GetConversation(context.Context, string, string) (*model.ConversationMapping, error) {
 	return nil, nil
 }
